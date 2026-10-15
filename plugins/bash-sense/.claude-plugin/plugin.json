@@ -1,0 +1,13 @@
+{
+  "name": "bash-sense",
+  "version": "0.1.0",
+  "description": "Gives an AI agent good taste in Bash: an environment card at session start, a skill that teaches the command a seasoned engineer would type, and a PreToolUse advisor that stops commands that would hang or misuse tools, asks before destructive ones, and nudges the rest.",
+  "author": {
+    "name": "KouCha",
+    "url": "https://github.com/kouchaweb"
+  },
+  "homepage": "https://github.com/kouchaweb/kouchaweb.github.io/tree/main/plugins/bash-sense",
+  "repository": "https://github.com/kouchaweb/kouchaweb.github.io",
+  "license": "MIT",
+  "keywords": ["bash", "shell", "hooks", "command-line", "safety", "ripgrep", "agent", "taste"]
+}

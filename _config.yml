@@ -1,0 +1,7 @@
+# GitHub Pages (Jekyll) settings for the site itself.
+# The Claude Code plugin sources under plugins/ and the marketplace manifest are not part of the site.
+exclude:
+  - plugins
+  - .claude-plugin
+  - README.md
+  - LICENSE
