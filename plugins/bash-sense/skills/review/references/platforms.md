@@ -32,7 +32,7 @@ command -v gsed gdate gtimeout greadlink 2>/dev/null   # GNU tools from brew cor
 | mtime epoch | `stat -c %Y f` | `stat -f %m f` | `find f -newermt …` / python |
 | mode / owner | `stat -c '%a %U' f` | `stat -f '%Lp %Su' f` | `ls -l f` |
 | `xargs` delimiter | `xargs -d '\n'` | — | `tr '\n' '\0' \| xargs -0` |
-| `xargs` no-run-if-empty | `-r` (default behaviour on BSD) | default | `xargs -r` is harmless on BSD xargs? no: use `[ -s list ] &&` |
+| `xargs` with empty input | runs the command once unless `-r` | never runs it (FreeBSD/macOS accept `-r` for compatibility) | `xargs -r` where available; otherwise `[ -s list ] && xargs CMD < list` |
 | `find -printf` | yes | no | `find … -exec stat … {} +` |
 | `find -regextype` | yes | `-E` flag before path | `-name`/`-path` globs |
 | `readlink -f` | yes | macOS 12.3+ only | `realpath` (13+/coreutils), `cd DIR && pwd -P` |
