@@ -21,32 +21,32 @@ command -v gsed gdate gtimeout greadlink 2>/dev/null   # GNU tools from brew cor
 |---|---|---|---|
 | in-place sed | `sed -i 's/a/b/' f` | `sed -i '' 's/a/b/' f` | `sed -i.bak 's/a/b/' f && rm f.bak` |
 | extended regex | `sed -E` (also `-r`) | `sed -E` | `sed -E` |
-| `\+`, `\|`, `\d` in sed | works in GNU basic regex | not in BSD | use `-E` and `[0-9]` |
+| `\+`, `\|`, `\?` in sed basic regex | GNU extensions | not in BSD | use `-E`; `\d` is not a digit class in any sed: `[0-9]` |
 | insert/append text | `sed '3i text'` | `sed '3i\'$'\n''text'` | `awk` or `printf`/`ed` |
 | PCRE grep | `grep -P '\d+(?=px)'` | no `-P` | `rg -P`, `perl -ne` |
 | grep -o with groups | `grep -oP 'id=\K\d+'` | — | `sed -E 's/.*id=([0-9]+).*/\1/'`, `rg -oP` |
 | `date` relative | `date -d '1 day ago' +%F` | `date -v-1d +%F` | `python3 -c 'import datetime as d; print(d.date.today()-d.timedelta(1))'` |
-| `date` from epoch | `date -d @1700000000` | `date -r 1700000000` | `python3 -c 'import datetime as d; print(d.datetime.utcfromtimestamp(1700000000))'` |
-| parse a date string | `date -d '2024-01-31' +%s` | `date -j -f %Y-%m-%d 2024-01-31 +%s` | python |
+| `date` from epoch | `date -d @1700000000` | `date -r 1700000000` | `python3 -c 'import datetime as d; print(d.datetime.fromtimestamp(1700000000, d.timezone.utc))'` |
+| parse a date string | `date -d '2024-01-31' +%s` | `date -j -f '%Y-%m-%d %H:%M:%S' '2024-01-31 00:00:00' +%s` (unspecified fields default to now) | python |
 | file size | `stat -c %s f` | `stat -f %z f` | `wc -c < f` |
 | mtime epoch | `stat -c %Y f` | `stat -f %m f` | `find f -newermt …` / python |
 | mode / owner | `stat -c '%a %U' f` | `stat -f '%Lp %Su' f` | `ls -l f` |
 | `xargs` delimiter | `xargs -d '\n'` | — | `tr '\n' '\0' \| xargs -0` |
-| `xargs` with empty input | runs the command once unless `-r` | never runs it (FreeBSD/macOS accept `-r` for compatibility) | `xargs -r` where available; otherwise `[ -s list ] && xargs CMD < list` |
+| `xargs` with empty input | runs the command once unless `-r` | never runs it; `-r` accepted for compatibility | `xargs -r` |
 | `find -printf` | yes | no | `find … -exec stat … {} +` |
 | `find -regextype` | yes | `-E` flag before path | `-name`/`-path` globs |
 | `readlink -f` | yes | macOS 12.3+ only | `realpath` (13+/coreutils), `cd DIR && pwd -P` |
 | `realpath` | yes | macOS 13+ | python `os.path.realpath` |
 | `cp --parents`, `cp -u` | yes | no | `rsync -R`, `mkdir -p` |
-| `ls --color`, `ls --time-style` | yes | `ls -G`, `ls -lT` | `ls -l` |
-| `sort -V` | yes | no (older) | `sort -t. -k1,1n -k2,2n -k3,3n` |
+| `ls --time-style`, `ls --sort` | yes | no (`--color=when` exists since macOS 12; use `ls -G`, `ls -lT`) | `ls -l` |
+| `sort -V` | yes | yes (10.14+) | `sort -t. -k1,1n -k2,2n -k3,3n` on very old systems |
 | `head -n -N` (all but last N) | yes | no | `sed '$d'` for one line; `awk` |
 | `tail -r` | — | reverse | `tac` (GNU) / `tail -r` (BSD) |
 | `tac`, `shuf`, `nproc`, `timeout`, `sha256sum`, `md5sum`, `free`, `ss` | yes | missing | `tail -r`, `sort -R`/`jot`, `sysctl -n hw.ncpu`, `gtimeout`/perl, `shasum -a 256`, `md5 -q`, `vm_stat`, `lsof -iTCP -sTCP:LISTEN` |
 | `base64 -w0` | yes | `base64` (no wrap by default) | `base64 \| tr -d '\n'` |
 | `base64 -d` | yes | `base64 -D` (older) / `-d` (newer) | `base64 --decode` |
 | `mktemp` | `mktemp -d` · `mktemp -d /tmp/x.XXXXXX` | `mktemp -d` · `mktemp -d -t x` | `mktemp -d /tmp/x.XXXXXX` |
-| `split -d` (numeric suffixes) | yes | no | `split -a 3` |
+| `split -d` (numeric suffixes) | yes | macOS 14+ only | `split -a 3` |
 | `du -b`, `du --max-depth` | yes | `du -d` | `du -d 1` (both) |
 | `wc -l` output | `12` | `      12` (padded) | `wc -l < f \| tr -d ' '` |
 | `seq` | yes | yes (also `jot`) | `seq 1 10` |

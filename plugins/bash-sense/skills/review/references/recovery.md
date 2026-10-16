@@ -32,7 +32,7 @@ read the error, confirm the cause with one cheap command, apply the narrow fix, 
 | `ENOTFOUND` / `getaddrinfo` / DNS | `getent hosts HOST`, `dig +short HOST` | no network or wrong host; respect proxies (`HTTPS_PROXY`); do not retry forever |
 | TLS: `self signed certificate in certificate chain`, `unable to get local issuer` | `curl -sSv URL 2>&1 \| grep -i -A2 'SSL'` | the environment has a proxy/CA bundle: `--cacert`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`; never `-k`/`NODE_TLS_REJECT_UNAUTHORIZED=0` |
 | `403`/`407` from a proxy | `env \| cut -d= -f1 \| grep -i proxy` | the host is not allowed: say so; do not tunnel around it |
-| `fatal: detected dubious ownership` | `ls -ld .git; id` | `git config --global --add safe.directory PATH` (ask) or `git -c safe.directory=PATH …` |
+| `fatal: detected dubious ownership` | `ls -ld .git; id` | `git config --global --add safe.directory PATH` (ask) or `git -c safe.directory=PATH …` (git 2.38+) |
 | `fatal: not a git repository` | `git rev-parse --show-toplevel` | wrong cwd; `git -C DIR` |
 | `error: Your local changes would be overwritten` | `git status --short` | `git stash push -u -m wip`, do the operation, `git stash pop`; never `reset --hard` |
 | merge conflict | `git diff --name-only --diff-filter=U` | resolve by hand, regenerate lockfiles with the tool, `git add`, continue |

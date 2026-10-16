@@ -50,7 +50,7 @@ This file covers inspection, non-interactive editing of history, and the ask-fir
 |---|---|
 | squash the last N commits | `git reset --soft HEAD~N && git commit -m "…"` |
 | reorder / drop / reword | `GIT_SEQUENCE_EDITOR='sed -i "s/^pick \(abc123\)/drop \1/"' git rebase -i BASE` (scripted todo), or cherry-pick onto a fresh branch in the order you want |
-| edit one old commit's message | `git commit --fixup=SHA` then `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash BASE` |
+| edit one old commit's message | `GIT_SEQUENCE_EDITOR="sed -i '/^pick SHA7/a exec git commit --amend -m \"new message\"'" git rebase -i BASE` (`--fixup=SHA` keeps the old message; it is for content fixups) |
 | move commits onto another base | `git rebase --onto NEW_BASE OLD_BASE BRANCH` |
 | undo a commit, keep the work | `git reset --soft HEAD~1` (staged) · `git reset HEAD~1` (unstaged) |
 | undo a pushed commit | `git revert SHA` (new commit; safe on shared branches) |
@@ -67,7 +67,7 @@ git merge --no-edit origin/main 2>&1 | tail -n 20   # or rebase
 git diff --name-only --diff-filter=U                 # conflicted files
 rg -n '^(<{7}|={7}|>{7})' -- FILE                    # markers
 # edit FILE (keep both sides' intent), then:
-git add FILE && git merge --continue                 # or: GIT_EDITOR=true git rebase --continue
+git add FILE && GIT_EDITOR=true git merge --continue # (or `git commit --no-edit`); rebase: GIT_EDITOR=true git rebase --continue
 ```
 
 Generated files (lockfiles, snapshots) are regenerated with the project's tool (`pnpm install`,
@@ -93,7 +93,7 @@ Generated files (lockfiles, snapshots) are regenerated with the project's tool (
 
 - `git -C DIR …` instead of `cd DIR && git …`.
 - `git log` inside `$(…)` or pipes is fine; the pager only appears on a TTY.
-- "dubious ownership": the repo is owned by another uid (containers). `git config --global --add safe.directory PATH` changes global config (ask); per-session: `GIT_CONFIG_GLOBAL=/tmp/gitconfig git config --global --add safe.directory PATH` with that variable set for later commands, or `git -c safe.directory=PATH …`.
+- "dubious ownership": the repo is owned by another uid (containers). `git config --global --add safe.directory PATH` changes global config (ask); per-session: `GIT_CONFIG_GLOBAL=/tmp/gitconfig git config --global --add safe.directory PATH` with that variable set for later commands, or `git -c safe.directory=PATH …` (git 2.38+; older: `GIT_CONFIG_GLOBAL`).
 - Credentials: never embed tokens in remote URLs; `GIT_TERMINAL_PROMPT=0` makes a missing credential fail fast instead of hanging; `gh auth setup-git` or a credential helper is the user's job.
 - Large output: `git diff --stat | tail -n 1` gives totals; `git diff --shortstat`.
 - LFS/submodules: `git submodule update --init --recursive` (ask before `--remote`); `git lfs ls-files | head`.

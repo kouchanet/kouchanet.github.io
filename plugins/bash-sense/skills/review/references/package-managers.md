@@ -27,10 +27,10 @@ Quick look: `ls -a | rg -n 'lock|package.json|pyproject|Makefile|justfile|Taskfi
 | pass args to script | `npm run test -- --run` | `pnpm test --run` | `yarn test --run` | `bun run test --run` |
 | run a local bin | `npx NAME` / `npm exec NAME` | `pnpm exec NAME` | `yarn NAME` / `yarn exec NAME` | `bunx NAME` |
 | one-off remote package | `npx -y PKG` | `pnpm dlx PKG` | `yarn dlx PKG` (berry) | `bunx PKG` |
-| list / why | `npm ls PKG` · `npm ls --depth=0` | `pnpm ls` · `pnpm why PKG` | `yarn list --depth=0` · `yarn why PKG` | `bun pm ls` |
-| outdated / update | `npm outdated` · `npm update` | `pnpm outdated` · `pnpm update` | `yarn outdated` · `yarn upgrade` | `bun outdated` · `bun update` |
+| list / why | `npm ls PKG` · `npm ls --depth=0` | `pnpm ls` · `pnpm why PKG` | `yarn list --depth=0` (classic) / `yarn info -A --name-only` (berry) · `yarn why PKG` | `bun pm ls` |
+| outdated / update | `npm outdated` · `npm update` | `pnpm outdated` · `pnpm update` | `yarn outdated` · `yarn upgrade` (classic) / `yarn up PKG`, `yarn upgrade-interactive` (berry) | `bun outdated` · `bun update` |
 | workspaces | `npm run build -w pkg-a` · `--workspaces` | `pnpm --filter pkg-a build` · `-r` | `yarn workspace pkg-a build` · `yarn workspaces foreach` | `bun run --filter pkg-a build` |
-| quiet | `npm --silent run x` · `npm ci --no-audit --no-fund` | `pnpm --reporter=silent` | `yarn -s` | `bun --silent` |
+| quiet | `npm --silent run x` · `npm ci --no-audit --no-fund` | `pnpm --reporter=silent` | `yarn -s` (classic; berry has no global silent flag) | `bun --silent` |
 
 - `npm test` is `npm run test`; `bun test` is bun's *own* test runner, so in a vitest/jest project use `bun run test`.
 - `vitest`/`jest` in non-TTY mode run once, but pass `vitest run` / `jest --watchAll=false` explicitly; never `--watch`.
@@ -49,7 +49,7 @@ Quick look: `ls -a | rg -n 'lock|package.json|pyproject|Makefile|justfile|Taskfi
 | ad hoc install into the env | `uv pip install PKG` | `poetry run pip install PKG` | `pipenv run pip install PKG` | `pdm run pip install PKG` | `.venv/bin/pip install PKG` |
 | one-off tool | `uvx TOOL` | `pipx run TOOL` | `pipx run TOOL` | `pdm run TOOL` | `pipx run TOOL` |
 | python version | `uv python install 3.12` · `.python-version` | `poetry env use 3.12` | `pipenv --python 3.12` | `pdm use 3.12` | `pyenv local 3.12` (ask) |
-| lock / export | `uv lock` · `uv export > requirements.txt` | `poetry lock` · `poetry export` | `pipenv lock` | `pdm lock` | `pip freeze > requirements.txt` |
+| lock / export | `uv lock` · `uv export > requirements.txt` | `poetry lock` · `poetry export` (Poetry 2: `poetry self add poetry-plugin-export` first) | `pipenv lock` | `pdm lock` | `pip freeze > requirements.txt` |
 
 - `source .venv/bin/activate` does not survive between Bash calls: call `.venv/bin/python`, `.venv/bin/pip`, `.venv/bin/pytest` by path, or use the runner (`uv run`).
 - `python` vs `python3`: check the card; `python3 -m pip` beats a bare `pip` (same interpreter guaranteed); `python3 -m pytest` beats `pytest` when the PATH is unclear.

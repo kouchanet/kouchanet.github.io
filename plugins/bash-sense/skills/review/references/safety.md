@@ -14,14 +14,14 @@ command will do before running it, and has made the result recoverable when it m
 
 | Command | Risk | Preview | Reversible / safer form | Tier |
 |---|---|---|---|---|
-| `rm -rf PATH` | gone for good | `ls -la PATH`, `du -sh PATH` | `mv PATH /tmp/trash-$(date +%s)/`; artifacts (`node_modules`, `dist`, `target`, `.venv`, caches) are fine to delete | ask (artifacts: ok) |
+| `rm -rf PATH` | gone for good | `ls -la PATH`, `du -sh PATH` | `d=/tmp/trash-$(date +%s); mkdir -p "$d" && mv PATH "$d"/`; artifacts (`node_modules`, `dist`, `target`, `.venv`, caches) are fine to delete | ask (artifacts: ok) |
 | `rm -rf $VAR/sub` | `$VAR` empty → `rm -rf /sub` | `echo "$VAR"` | `rm -rf "${VAR:?}/sub"` | never unguarded |
 | `rm -rf /`, `~`, `*`, `.`, `..`, `/usr` … | the machine / all work | — | — | never |
 | `rm -rf .git` | all history and remotes | `git log --oneline \| wc -l` | fresh clone elsewhere | ask |
 | `find … -delete`, `find … -exec rm` | mass delete | the same `find` with `-print` | `-exec mv {} /tmp/trash/ \;` | preview, then ask |
 | `git reset --hard` | uncommitted work | `git status --short`, `git stash list` | `git stash push -u -m why`; `--soft`/`--mixed` | ask |
 | `git checkout -- .`, `git restore .` | uncommitted edits | `git diff --stat` | `git stash push -m why -- path` | ask |
-| `git clean -f` / `-fdx` | untracked / ignored files (`.env`!) | `git clean -nd` / `-ndx` | `-X` (ignored only), `-e '!.env'` | ask |
+| `git clean -f` / `-fdx` | untracked / ignored files (`.env`!) | `git clean -nd` / `-ndx` | `-X` (ignored only), `-e .env` keeps it even with `-x` | ask |
 | `git push --force` | collaborators' commits | `git log origin/BR..BR` | `--force-with-lease`; never to main without the user | ask |
 | `git branch -D` | unmerged commits | `git log BR --not main --oneline` | `-d` | ask |
 | `git stash drop/clear` | stashed work | `git stash show -p` | `git stash branch` | ask |
@@ -33,7 +33,7 @@ command will do before running it, and has made the result recoverable when it m
 | `curl … \| sh`, `wget -O- … \| bash` | runs unread remote code | `curl -fsSLo /tmp/i.sh URL; head -n 60 /tmp/i.sh` | run the file after reading | ask |
 | `sudo CMD` | root on the user's machine; no password prompt possible | `id`, `sudo -n true` | do it inside the project; or the user runs it | ask (drop `sudo` when already root) |
 | `npm i -g`, `pip install` (system), `brew install`, `apt-get install`, `cargo install`, `go install` | machine state | `command -v TOOL` | `npx -y`, `pnpm dlx`, `uvx`, `pipx run`, `go run PKG@ver`, dev dependency | advise (container: routine) |
-| `pkill NAME`, `killall NAME` | the user's own editor/server with that name | `pgrep -af NAME` | `kill PID` of the one you started, `pkill -f 'exact cmd'` | ask |
+| `pkill NAME`, `killall NAME` | the user's own editor/server with that name | `pgrep -af '[N]AME'` | `kill PID` of the one you started, `pkill -f '[e]xact cmd'` (bracketed so the tool's own shell does not match) | ask |
 | `kill -9` | no cleanup (locks, temp files, children) | `kill -0 PID` | `kill PID; sleep 2; kill -9 PID` only if alive | advise |
 | `kill -9 -1`, fork bombs, `dd of=/dev/…`, `mkfs`, `> /dev/sda`, `shred` | hardware/data | — | — | never |
 | `docker system/volume prune`, `docker rm -f $(docker ps -aq)`, `rmi $(docker images -q)` | other projects' containers, images, data | `docker ps -a`, `docker volume ls` | remove by name; `docker compose down` | ask |

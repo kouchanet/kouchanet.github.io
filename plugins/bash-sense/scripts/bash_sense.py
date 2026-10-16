@@ -1304,8 +1304,6 @@ def h_docker_tty(seg, ctx):
     if sub in ("run", "exec") and not detached and any(v in ("-it", "-ti", "-t", "--tty") or (v.startswith("-") and not v.startswith("--") and "t" in v[1:] and "i" in v[1:]) for v in own):
         return Finding("deny", "H07", "`%s %s -t` allocates a TTY, which does not exist here (\"the input device is not a TTY\")." % (seg.prog, sub),
                        "Drop `-t` (keep `-i` only when piping stdin): `%s %s CONTAINER CMD`. For a shell session, run commands one by one." % (seg.prog, sub))
-    if sub == "compose" and sub2 in ("exec", "run") and not any(v in ("-T", "--no-TTY", "--no-tty", "-d", "--detach") for v in vals):
-        return Finding("advise", "H07", "`docker compose %s` allocates a TTY by default; add `-T` to be safe without a terminal." % sub2)
     return None
 
 
@@ -1453,7 +1451,7 @@ def h_prompts(seg, ctx):
     vals = seg.argv
     if seg.has_stdin and p not in ("ssh", "gh"):
         return None
-    if p in ("npm", "pnpm", "yarn", "bun") and vals and vals[0] == "init" and not seg.has_flag("-y", "--yes"):
+    if p in ("npm", "yarn", "bun") and vals and vals[0] == "init" and not seg.has_flag("-y", "--yes"):
         return Finding("advise", "H14", "`%s init` asks questions interactively; `%s init -y` takes the defaults." % (p, p))
     if p in ("npm", "pnpm", "yarn", "bun", "npx") and vals and (vals[0] == "create" or (p == "npx" and vals[0].startswith("create-"))) and not any(v in ("-y", "--yes", "--defaults", "--template", "-t", "--no-interactive") or v.startswith("--template") for v in vals):
         return Finding("advise", "H14", "project generators prompt interactively; pass their non-interactive flags (`--yes`, `--template NAME`, `--no-git`, etc.) or check `--help` first.")
@@ -1716,7 +1714,9 @@ def t_ps_grep(seg, ctx):
         if pat in ("-v", "grep"):
             pat = "NAME"
         if ctx.has("pgrep"):
-            return Finding("advise", "T07", "`ps | grep %s` also matches the grep itself and needs awk to get PIDs; `pgrep -af %s` prints pid + full command, `pgrep -f %s | xargs -r kill` acts on it." % (pat, pat, pat))
+            flag = "-fl" if ctx.mac else "-af"
+            brk = "[" + pat[0] + "]" + pat[1:] if pat and pat[0].isalnum() else pat
+            return Finding("advise", "T07", "`ps | grep %s` also matches the grep itself and needs awk to get PIDs; `pgrep %s '%s'` prints pid + full command (the bracket keeps it from matching this shell), `pgrep -f '%s' | xargs -r kill` acts on it." % (pat, flag, brk, brk))
     return None
 
 
@@ -1761,7 +1761,7 @@ def t_json_by_hand(seg, ctx):
         if len(files) == 1 and files[0].endswith(".json") and not seg.nested:
             pat = pos[0].val.strip('"\'')
             key = re.sub(r'[^A-Za-z0-9_$.-]', "", pat)
-            return Finding("advise", "T11", "grepping JSON gives partial lines; `jq '.%s' %s` (or `jq 'paths | join(\".\")' %s | grep %s` to find the key) is exact." % (key or "KEY", files[0], files[0], key or "KEY"))
+            return Finding("advise", "T11", "grepping JSON gives partial lines; `jq '.%s' %s` (or `jq 'paths(scalars) | map(tostring) | join(\".\")' %s | grep %s` to find the key) is exact." % (key or "KEY", files[0], files[0], key or "KEY"))
         if len(files) == 1 and re.search(r"\.ya?ml$", files[0]) and ctx.has("yq") and not seg.nested:
             return Finding("advise", "T11", "yq is installed: `yq '.path.to.key' %s` reads YAML structurally." % files[0])
     return None
@@ -1911,7 +1911,7 @@ def t_flag_flavor(seg, ctx):
         return Finding("deny", "T19", "BSD grep (macOS) has no `-P`.", "Use %s; most PCRE patterns work with `-E` after replacing `\\d` by `[0-9]`." % alt)
     if p == "date":
         if fl("date") == "bsd" and (seg.has_flag("-d", "--date") or any(v.startswith("--date=") for v in vals)):
-            alt = "`gdate -d ...`" if ctx.has("gdate") else "`date -j -f '%Y-%m-%d' '2024-01-31' +%s` to parse, `date -v-1d` to shift"
+            alt = "`gdate -d ...`" if ctx.has("gdate") else "`date -j -f '%Y-%m-%d %H:%M:%S' '2024-01-31 00:00:00' +%s` to parse (unspecified fields default to now), `date -v-1d` to shift"
             return Finding("deny", "T19", "BSD date (macOS) has no `-d`.", "Use %s." % alt)
         if fl("date") == "gnu" and (seg.has_flag("-v") or seg.has_flag("-j")):
             return Finding("deny", "T20", "GNU date has no `-v`/`-j` (those are macOS forms).", "Use `date -d '1 day ago' +%F` / `date -d @EPOCH`.")
@@ -1921,11 +1921,11 @@ def t_flag_flavor(seg, ctx):
         if fl("stat") == "gnu" and seg.has_flag("-f") and not seg.has_flag("--file-system"):
             if not any(v.startswith("%") for v in vals):
                 return None
-            return Finding("deny", "T20", "GNU stat's `-f` means file-system; the macOS format flag is `-c` here.", "Size: `stat -c %s FILE`; mtime: `stat -c %Y FILE`; mode: `stat -c %a FILE`.")
+            return Finding("deny", "T20", "GNU stat's `-f` means file-system; GNU's format flag is `-c` (macOS uses `-f`).", "Size: `stat -c %s FILE`; mtime: `stat -c %Y FILE`; mode: `stat -c %a FILE`.")
     if p == "xargs" and fl("xargs") == "bsd" and (seg.has_flag("-d", "--delimiter") or any(v.startswith("-d") for v in vals if v != "-d")):
         return Finding("deny", "T19", "BSD xargs (macOS) has no `-d`.", "Produce NUL-separated input and use `-0`: `tr '\\n' '\\0' | xargs -0 CMD`.")
     if p == "sed" and fl("sed") == "bsd" and seg.has_flag("-r"):
-        return Finding("deny", "T19", "BSD sed (macOS) has no `-r`.", "Use `sed -E` (works on GNU too).")
+        return Finding("advise", "T19", "`sed -r` only exists on macOS 11+ (and GNU); `sed -E` is the form that works everywhere.")
     if p == "find" and fl("find") == "bsd" and "-printf" in vals:
         return Finding("deny", "T19", "BSD find (macOS) has no `-printf`.", "Use `find ... -exec stat -f '%m %N' {} +` or `fd ... -x stat -f '%m %N'`.")
     if p == "head" and fl("sed") == "bsd" and any(re.match(r"^-n\s*-\d+$", v) or v == "-n" for v in vals):
@@ -1936,10 +1936,8 @@ def t_flag_flavor(seg, ctx):
         return Finding("deny", "T19", "macOS base64 has no `-w`.", "Use `base64 | tr -d '\\n'` (macOS base64 does not wrap by default).")
     if p == "cp" and fl("sed") == "bsd" and seg.has_flag("--parents"):
         return Finding("deny", "T19", "BSD cp has no `--parents`.", "Use `rsync -R SRC DEST/` or `mkdir -p` + `cp`.")
-    if p == "ls" and fl("sed") == "bsd" and any(v.startswith("--") for v in vals):
-        return Finding("deny", "T19", "BSD ls (macOS) has no `--long-options`.", "Use the short flags: `ls -la`, `ls -lt`, `ls -G` for color, `ls -lT` for full timestamps.")
-    if p == "sort" and fl("sed") == "bsd" and seg.has_flag("-V", "--version-sort"):
-        return Finding("deny", "T19", "BSD sort on macOS lacks `-V` (version sort).", "Use `gsort -V` from brew coreutils or `sort -t. -k1,1n -k2,2n -k3,3n`.")
+    if p == "ls" and fl("sed") == "bsd" and any(v.startswith("--") and not v.startswith("--color") for v in vals):
+        return Finding("deny", "T19", "BSD ls (macOS) has no long options apart from `--color`.", "Use the short flags: `ls -la`, `ls -lt`, `ls -G` for color, `ls -lT` for full timestamps.")
     if p == "readlink" and fl("sed") == "bsd" and seg.has_flag("-f", "-e", "-m") and not ctx.has("greadlink"):
         return Finding("advise", "T19", "`readlink -f` only exists on macOS 12.3+; `realpath FILE` or `cd DIR && pwd -P` is the safe form.")
     if p == "md5" and fl("sed") == "gnu":
@@ -2035,8 +2033,8 @@ JS_PM_TRANSLATE = {
     "remove": {"npm": "npm uninstall {pkgs}", "pnpm": "pnpm remove {pkgs}", "yarn": "yarn remove {pkgs}", "bun": "bun remove {pkgs}"},
     "run": {"npm": "npm run {script}", "pnpm": "pnpm run {script}", "yarn": "yarn {script}", "bun": "bun run {script}"},
     "exec": {"npm": "npx {bin}", "pnpm": "pnpm exec {bin}  (pnpm dlx for packages not installed)", "yarn": "yarn {bin}", "yarn_berry": "yarn dlx {bin}", "bun": "bunx {bin}"},
-    "update": {"npm": "npm update", "pnpm": "pnpm update", "yarn": "yarn upgrade", "bun": "bun update"},
-    "ls": {"npm": "npm ls --depth=0", "pnpm": "pnpm ls --depth 0", "yarn": "yarn list --depth=0", "bun": "bun pm ls"},
+    "update": {"npm": "npm update", "pnpm": "pnpm update", "yarn": "yarn upgrade", "yarn_berry": "yarn up", "bun": "bun update"},
+    "ls": {"npm": "npm ls --depth=0", "pnpm": "pnpm ls --depth 0", "yarn": "yarn list --depth=0", "yarn_berry": "yarn info -A --name-only", "bun": "bun pm ls"},
 }
 
 
@@ -2088,7 +2086,7 @@ def t_js_pm_mismatch(seg, ctx):
     if p == "bun" and seg.argv and seg.argv[0] not in ("install", "add", "remove", "i", "update", "run", "x", "test", "pm", "ci"):
         return None  # `bun file.ts` as a runtime is fine
     canon, params = _js_canonical(seg)
-    key = "yarn_berry" if (want == "yarn" and ctx.proj.get("yarn_berry") and canon in ("ci", "exec") and "yarn_berry" in JS_PM_TRANSLATE.get(canon, {})) else want
+    key = "yarn_berry" if (want == "yarn" and ctx.proj.get("yarn_berry") and "yarn_berry" in JS_PM_TRANSLATE.get(canon, {})) else want
     sugg = None
     if canon and canon in JS_PM_TRANSLATE:
         tpl = JS_PM_TRANSLATE[canon].get(key) or JS_PM_TRANSLATE[canon].get(want)
@@ -2343,7 +2341,7 @@ def d_rm(seg, ctx):
         if plain:
             names = " ".join(w.raw for w in plain)
             return Finding("ask", "D03", "`rm -rf %s` deletes without any way back." % names,
-                           "Preview first (`ls -la %s`), and prefer a reversible move: `mv %s /tmp/trash-$(date +%%s)/`. Build artifacts (node_modules, dist, target...) pass without asking." % (names, names))
+                           "Preview first (`ls -la %s`), and prefer a reversible move: `d=/tmp/trash-$(date +%%s); mkdir -p \"$d\" && mv %s \"$d\"/`. Build artifacts (node_modules, dist, target...) pass without asking." % (names, names))
     return None
 
 
@@ -2473,9 +2471,9 @@ def d_kill(seg, ctx):
     vals = seg.argv
     if p == "kill":
         if "-1" in vals and (seg.has_flag("-9", "-KILL", "-s") or "KILL" in vals or "-TERM" in vals):
-            return Finding("deny", "D13", "`kill -1` signals every process you own, including this session.", "", hard=True)
+            return Finding("deny", "D13", "`kill ... -1` (pid -1) signals every process you own, including this session.", "", hard=True)
         if "-1" in vals and len([v for v in vals if not v.startswith("-")]) == 0:
-            return Finding("deny", "D13", "`kill -1` (pid -1) signals every process you own.", "Name the PID: `pgrep -af NAME` then `kill PID`.", hard=True)
+            return Finding("deny", "D13", "`kill ... -1` (pid -1) signals every process you own.", "Name the PID: `pgrep -af '[N]AME'` then `kill PID`.", hard=True)
         if seg.has_flag("-9", "-KILL") or vals[:1] == ["-s"] and vals[1:2] in (["KILL"], ["9"]):
             return Finding("advise", "D13", "`kill -9` skips cleanup handlers (lock files, temp files, child processes); send TERM first and escalate only if it survives: `kill PID; sleep 2; kill -0 PID 2>/dev/null && kill -9 PID`.")
         return None
@@ -2486,7 +2484,7 @@ def d_kill(seg, ctx):
             base = pat.strip("'\"")
             if base in generic or (len(base) <= 3 and not base.isdigit()):
                 return Finding("ask", "D13", "`%s %s` kills every matching process on the machine, including the user's own editors, servers and this session's tooling." % (p, pat),
-                               "Find the exact one first: `pgrep -af %s` (shows pid + full command line), then `kill PID`; or match the full command: `pkill -f 'node server.js'`." % base)
+                               "Find the exact one first: `pgrep %s '[%s]%s'` (pid + full command line; the bracket excludes this shell), then `kill PID`; or match the full command: `pkill -f '[n]ode server.js'`." % ("-fl" if ctx.mac else "-af", base[:1], base[1:]))
         if seg.has_flag("-9", "-KILL"):
             return Finding("advise", "D13", "`%s -9` skips cleanup; try without `-9` first." % p)
     return None

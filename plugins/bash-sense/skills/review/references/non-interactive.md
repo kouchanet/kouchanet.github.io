@@ -22,7 +22,7 @@ a key. Three things go wrong: a prompt waits forever (the call times out), a TTY
 | `ssh HOST` (no command) | hangs / exits | `ssh -o BatchMode=yes HOST 'CMD'` |
 | `ssh` to a new host | host key prompt (fails or hangs) | `-o StrictHostKeyChecking=accept-new` |
 | `docker exec -it`, `docker run -it` | "the input device is not a TTY" | drop `-t`; `-i` only when piping stdin |
-| `docker compose exec` | allocates a TTY by default | `-T` |
+| `docker compose exec` | Compose v2 drops the TTY by itself when stdout is not a terminal | `-T` to be explicit in scripts |
 | `apt-get install` (no `-y`) | "Abort." | `-y`, `DEBIAN_FRONTEND=noninteractive` |
 | `npm init`, `yarn init` | questions | `-y` |
 | `npx PKG` (first run) | auto-yes with a warning | `-y` to be explicit |
@@ -78,7 +78,7 @@ kill "$(cat /tmp/dev.pid)"
 
 - `docker compose up -d SVC` then `docker compose logs --tail 50 SVC`; `docker compose down` when done.
 - If the harness's Bash tool has a run-in-background option, use it instead of `nohup` and poll its output.
-- `setsid CMD >/tmp/x.log 2>&1 < /dev/null &` fully detaches when the process must outlive the call's shell.
+- `setsid CMD >/tmp/x.log 2>&1 < /dev/null &` (Linux; macOS has no setsid) fully detaches when the process must outlive the call's shell.
 - Port already in use: `ss -ltnp | grep :3000` (Linux) / `lsof -nP -iTCP:3000 -sTCP:LISTEN` (macOS); kill only the process you started (by saved pid) or ask.
 
 ## Polling with a bound
@@ -98,7 +98,7 @@ timeout 300 bash -c 'while kill -0 '"$PID"' 2>/dev/null; do sleep 2; done'; tail
 
 - `timeout 60 CMD` (GNU coreutils; `gtimeout` on macOS via brew, or `perl -e 'alarm shift; exec @ARGV' 60 CMD`).
 - `timeout -k 5 60 CMD` sends KILL 5 s after TERM.
-- Exit status 124 means the limit fired; decide whether the command is slow (raise it knowingly) or a server (background it).
+- Exit status 124 (`timeout`) or 142 (the perl `alarm` form, killed by SIGALRM) means the limit fired; decide whether the command is slow (raise it knowingly) or a server (background it).
 - `curl --max-time 20 --connect-timeout 5`, `ssh -o ConnectTimeout=5`, `nc -w 3`, `pip --timeout 60`, `npm --fetch-timeout=60000` for network tools.
 
 ## Confirmations that tools ask for

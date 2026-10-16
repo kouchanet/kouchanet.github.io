@@ -38,8 +38,8 @@ and the form that cannot surprise anyone. Every habit below is a concrete form o
 | `grep -rn "x" .` | `rg -n "x"` (`-t py`, `-g '*.ts'`, `-l`, `-F`) | skips `.gitignore`d paths, binaries, `.git`; 10× faster; no `node_modules` noise. Fallback in a repo: `git grep -n "x"` |
 | `find . -name "*.py"` | `fd -e py` (`-H` hidden, `-I` ignored, `-t f`, `-x CMD`) | same reasons; `find` needs `-not -path '*/node_modules/*'` to be quiet |
 | `cat f.json \| grep key` | `jq '.key' f.json` (`-r` raw, `keys`, `.[]`, `-c`) | structural, exact, no partial lines; `yq` for YAML |
-| `ps aux \| grep node` | `pgrep -af node` | no self-match, prints pid + full command |
-| `kill $(ps … \| awk …)` | `pkill -f 'node server.js'` after `pgrep -af` | match the full command line, never a bare name |
+| `ps aux \| grep node` | `pgrep -af '[n]ode'` (Linux) · `pgrep -fl '[n]ode'` (macOS) | pid + full command; the `[n]` trick keeps the pattern from matching the shell that runs it |
+| `kill $(ps … \| awk …)` | `kill PID` from the pgrep above, or `pkill -f '[n]ode server.js'` | match the full command line (bracketed so the tool's own shell is not killed), never a bare name |
 | `which x` | `command -v x` | POSIX, sees functions/aliases, exit status is the answer |
 | `` `cmd` `` | `$(cmd)` | nests, no backslash surprises |
 | `ls \| grep foo` | `ls -d *foo*` or `fd -d 1 foo` | globs are exact; `ls` output is for humans |
@@ -104,7 +104,7 @@ A seasoned engineer's destructive commands are boring because they already know 
 | Ladder | Examples |
 |---|---|
 | **Preview** | `git clean -nd`, `rsync -n`, `ls -la PATH` before `rm`, `find … -print` before `-delete`, `sed -n 's/a/b/p'` before `sed -i`, `terraform plan`, `kubectl --dry-run=client`, `npm publish --dry-run`, `git push --dry-run` |
-| **Reversible** | `git stash push -u -m 'why'` instead of `checkout -- .`/`reset --hard`; `git revert` instead of rewriting; `--force-with-lease` instead of `--force`; `mv PATH /tmp/trash-$(date +%s)/` instead of `rm -rf`; `git branch backup-$(date +%s)` before a rebase; `cp -a f f.bak` before a risky edit |
+| **Reversible** | `git stash push -u -m 'why'` instead of `checkout -- .`/`reset --hard`; `git revert` instead of rewriting; `--force-with-lease` instead of `--force`; `d=/tmp/trash-$(date +%s); mkdir -p "$d" && mv PATH "$d"/` instead of `rm -rf`; `git branch backup-$(date +%s)` before a rebase; `cp -a f f.bak` before a risky edit |
 | **Ask first** | `git reset --hard`, `git checkout -- .`, `git clean -f` (especially `-x`: it deletes `.env`), force pushes, `git branch -D`, `rm -rf` outside tmp/build artifacts, `rm -rf .git`, `pkill node`/`killall`, `kill -9` on processes you did not start, `sudo`, global installs, `git config --global`, writes to `~/.bashrc`/`/etc`, `docker system prune`/`down -v`, `kubectl delete`, `terraform apply`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE`, `db:reset`, `npm publish`, `gh pr merge`, `crontab -r`, `systemctl stop` |
 | **Never** | `rm -rf /`, `~`, `*`, `.`, `$VAR/` unguarded (`"${VAR:?}"`), `chmod -R 777`, `chown -R … /`, `curl … \| sh` unseen, `dd of=/dev/…`, `mkfs`, `kill -9 -1`, `--no-preserve-root` |
 
@@ -140,7 +140,7 @@ Windows shells. Check the environment card, then write for the flavor you have:
 | dates | `date -d '1 day ago' +%F`, `date -d @EPOCH` | `date -v-1d +%F`, `date -r EPOCH`, `date -j -f FMT STR` |
 | file size/mtime | `stat -c %s f`, `stat -c %Y f` | `stat -f %z f`, `stat -f %m f` (portable: `wc -c < f`) |
 | xargs delimiter | `xargs -d '\n'` | `tr '\n' '\0' \| xargs -0` |
-| missing on macOS | — | `timeout`→`gtimeout`, `tac`→`tail -r`, `nproc`→`sysctl -n hw.ncpu`, `sha256sum`→`shasum -a 256`, `ss`→`lsof -nP -iTCP -sTCP:LISTEN`, `readlink -f`→`realpath`/`pwd -P` |
+| missing on macOS | — | `timeout`→`gtimeout`, `tac`→`tail -r`, `nproc`→`sysctl -n hw.ncpu`, `sha256sum`→`shasum -a 256`, `ss`→`lsof -nP -iTCP -sTCP:LISTEN`, `readlink -f` (12.3+) / `realpath` (13+) → `cd DIR && pwd -P` |
 | Debian/Ubuntu names | `fdfind`, `batcat` | — |
 | busybox (alpine) | fewer flags: no `find -printf`, no `grep -P`, `sed -i` without suffix works, `wget` not `curl` | — |
 
@@ -150,7 +150,7 @@ Windows shells. Check the environment card, then write for the flavor you have:
 
 | Intent | Command |
 |---|---|
-| what is in this repo | `git ls-files \| head -n 50`, `fd -t d -d 2`, `tree -L 2 -I 'node_modules\|.git'` |
+| what is in this repo | `git ls-files \| head -n 50`, `fd -t d -d 2`, `tree -L 2 -I node_modules` |
 | find text | `rg -n "pat"` · `rg -n -t py "pat"` · `rg -l "pat"` · `rg -n -F 'a.b(c)'` · `rg -n -w word` · `rg -n -A3 -B1 pat` |
 | find files | `fd pattern` · `fd -e ts` · `fd -H '^\.env'` · `fd --changed-within 1d` · `fd -t f -S +10m` |
 | read part of a file | `sed -n '40,80p' f` · `head -n 60 f` · `tail -n 40 f` · `rg -n "def " f` |
@@ -161,7 +161,7 @@ Windows shells. Check the environment card, then write for the flavor you have:
 | branches / remotes | `git branch --show-current` · `git branch -a --sort=-committerdate \| head` · `git remote -v` · `git fetch --prune` |
 | commit | `git add path…` · `git commit -m "subject" -m "body"` · `git commit -F - <<'EOF' … EOF` |
 | who listens on a port | `ss -ltnp \| grep :3000` (Linux) · `lsof -nP -iTCP:3000 -sTCP:LISTEN` (macOS) |
-| process by name | `pgrep -af name` · `ps -eo pid,etime,pcpu,pmem,args --sort=-pcpu \| head -n 15` |
+| process by name | `pgrep -af '[n]ame'` (macOS: `pgrep -fl`) · `ps -eo pid,etime,pcpu,pmem,args --sort=-pcpu \| head -n 15` |
 | disk / size | `du -sh dir` · `du -sh * \| sort -h \| tail -n 20` · `df -h .` · `wc -c < f` |
 | HTTP | `curl -fsSL URL` · `curl -sS -o /dev/null -w '%{http_code}\n' URL` · `curl -sS -X POST -H 'Content-Type: application/json' -d @body.json URL` · `curl -sS --max-time 10 --retry 3 URL` |
 | archives | `tar -tzf x.tgz \| head` · `tar -xzf x.tgz -C dir` · `tar -czf out.tgz dir` · `unzip -l x.zip` · `unzip -q x.zip -d dir` |

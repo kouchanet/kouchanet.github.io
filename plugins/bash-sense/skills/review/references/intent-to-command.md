@@ -11,7 +11,7 @@ package managers and tasks · temp files and cleanup.
 
 | Intent | Preferred | Fallback / notes |
 |---|---|---|
-| shape of a project | `fd -t d -d 2` · `tree -L 2 -I 'node_modules\|.git\|dist'` | `find . -maxdepth 2 -type d -not -path '*/node_modules/*' -not -path '*/.git/*' \| sort` |
+| shape of a project | `fd -t d -d 2` · `tree -L 2 -I node_modules -I dist` | `find . -maxdepth 2 -type d -not -path '*/node_modules/*' -not -path '*/.git/*' \| sort` |
 | tracked files | `git ls-files` · `git ls-files 'src/**/*.ts'` | only inside a repo; respects `.gitignore` by construction |
 | files by extension | `fd -e py` · `fd -e ts -e tsx src` | `find . -type f \( -name '*.ts' -o -name '*.tsx' \) -not -path '*/node_modules/*'` |
 | files by name pattern | `fd 'config\.' ` · `fd -g '*.config.js'` | `find . -type f -name '*.config.js' -not -path '*/node_modules/*'` |
@@ -48,7 +48,7 @@ package managers and tasks · temp files and cleanup.
 | search git history | `git log -S'needle' --oneline` (adds/removes) · `git log -G'regex' --oneline` · `git grep -n pat $(git rev-list -n 20 HEAD)` | |
 | search inside archives / binaries | `zgrep -n pat file.gz` · `strings bin \| rg pat` | |
 | structural code search | `ast-grep -p 'console.log($A)' -l ts` (when installed) | `rg -n 'console\.log\('` |
-| TODOs | `rg -n 'TODO\|FIXME\|XXX'` | |
+| TODOs | `rg -n -e TODO -e FIXME -e XXX` | |
 
 ## Reading files
 
@@ -60,7 +60,7 @@ package managers and tasks · temp files and cleanup.
 | long lines / minified | `head -c 500 f` · `fold -w 120 f \| head` · `cut -c1-200 f` | never `cat` a `.min.js` |
 | how big is it | `wc -l f` · `wc -c < f` · `du -h f` | |
 | binary | `file f` · `xxd f \| head` · `strings f \| head` | |
-| compressed logs | `zcat f.gz \| tail -n 40` · `zless` is a pager, avoid | |
+| compressed logs | `gunzip -c f.gz \| tail -n 40` (macOS `zcat` wants `.Z` files) · `zless` is a pager, avoid | |
 | follow a log for a bit | `timeout 10 tail -f f` · `tail --pid=$PID -f f` (GNU) | never bare `tail -f` |
 | multiple files, labelled | `tail -n +1 a b` · `head -n 20 a b` | prints `==> name <==` headers |
 | diff two files/outputs | `diff -u a b` · `diff <(sort a) <(sort b)` · `git diff --no-index a b` | |
@@ -71,7 +71,7 @@ package managers and tasks · temp files and cleanup.
 |---|---|---|
 | pretty-print JSON | `jq . f` · `jq -C . f \| head` | `python3 -m json.tool f \| head` |
 | pick a field | `jq -r '.scripts.test' package.json` · `jq '.a.b[0].c' f` | `python3 -c 'import json,sys; print(json.load(open("f"))["a"])'` |
-| explore keys | `jq 'keys' f` · `jq 'paths(scalars) \| join(".")' f \| head -n 50` · `jq 'map(keys) \| add \| unique' f` | |
+| explore keys | `jq 'keys' f` · `jq 'paths(scalars) \| map(tostring) \| join(".")' f \| head -n 50` · `jq 'map(keys) \| add \| unique' f` | |
 | filter array | `jq '.[] \| select(.enabled) \| .name' f` · `jq -r '.[] \| [.id,.name] \| @tsv' f` | |
 | from a command's output | `gh api … \| jq -r '.[].title'` · `curl -sS URL \| jq .` | |
 | modify in place | `jq '.version="1.2.3"' f > tmp && mv tmp f` (jq has no `-i`) · `tmp=$(mktemp)` | preserve key order: jq does by default |
@@ -86,14 +86,14 @@ package managers and tasks · temp files and cleanup.
 
 | Intent | Preferred | Notes |
 |---|---|---|
-| is X running | `pgrep -af node` · `pgrep -fl 'uvicorn.*8000'` | prints pid + command |
+| is X running | `pgrep -af '[n]ode'` (Linux) · `pgrep -fl '[u]vicorn.*8000'` (macOS: `-l` prints the command, `-a` means ancestors) | the `[n]` bracket keeps the pattern from matching the shell running the command |
 | top consumers | `ps -eo pid,pcpu,pmem,etime,args --sort=-pcpu \| head -n 15` (Linux) · `top -l 1 -n 15 -o cpu` (macOS) | never bare `top`/`htop` |
 | process tree | `ps -ef --forest \| grep -A5 PID` (Linux) · `pstree -p PID` | |
 | who listens on a port | `ss -ltnp \| grep ':3000 '` (Linux) · `lsof -nP -iTCP:3000 -sTCP:LISTEN` (macOS/Linux) | `netstat -anv \| grep LISTEN` on macOS |
-| stop a process you started | `kill PID` → wait → `kill -9 PID` only if it survives · `kill %1` for a shell job | `pkill -f 'exact command line'`; never `pkill node` |
+| stop a process you started | `kill PID` → wait → `kill -9 PID` only if it survives · `kill %1` for a shell job | `pkill -f '[e]xact command line'` (bracketed, or it also matches the tool's shell); never `pkill node` |
 | wait for exit | `wait $PID` (same shell) · `while kill -0 $PID 2>/dev/null; do sleep 1; done` | |
 | run with time limit | `timeout 60 CMD` · `timeout -k 5 60 CMD` | `gtimeout` on macOS |
-| background with log | `nohup CMD > /tmp/x.log 2>&1 &` · `echo $!` to keep the pid · `setsid CMD &` to detach from the session | |
+| background with log | `nohup CMD > /tmp/x.log 2>&1 &` · `echo $!` to keep the pid · `setsid CMD &` (Linux) to detach from the session | |
 | limits / env of a pid | `cat /proc/PID/environ \| tr '\0' '\n' \| cut -d= -f1` (Linux) · `cat /proc/PID/limits` | |
 | open files | `lsof -p PID \| head` · `ls -la /proc/PID/fd` | |
 
@@ -155,7 +155,7 @@ package managers and tasks · temp files and cleanup.
 | epoch | `date +%s` | same |
 | epoch → date | `date -d @1700000000` | `date -r 1700000000` |
 | relative | `date -d '2 days ago' +%F` | `date -v-2d +%F` |
-| parse a string | `date -d '2024-01-31' +%s` | `date -j -f %Y-%m-%d 2024-01-31 +%s` |
+| parse a string | `date -d '2024-01-31' +%s` | `date -j -f '%Y-%m-%d %H:%M:%S' '2024-01-31 00:00:00' +%s` (unspecified fields default to *now*) |
 | file mtime | `stat -c %y f` · `date -r f` | `stat -f %Sm f` |
 | arithmetic | `echo $((7*24))` · `bc -l <<< '22/7'` · `python3 -c 'print(22/7)'` | same |
 | time a command | `time CMD` · `hyperfine 'CMD'` (installed) · `/usr/bin/time -v CMD` (GNU) | `/usr/bin/time -l CMD` |
@@ -226,4 +226,4 @@ package managers and tasks · temp files and cleanup.
 | temp dir/file | `t=$(mktemp -d)` · `f=$(mktemp)` · `mktemp -d /tmp/work.XXXXXX` (portable template) |
 | auto-clean in a script | `trap 'rm -rf "$t"' EXIT` |
 | scratch that survives the call | use the harness's scratchpad dir when it names one; else `/tmp/<task>-$(date +%s)` |
-| delete safely | `ls -la PATH` → `rm -rf PATH` for artifacts · `mv PATH /tmp/trash-$(date +%s)/` for anything else |
+| delete safely | `ls -la PATH` → `rm -rf PATH` for artifacts · `d=/tmp/trash-$(date +%s); mkdir -p "$d" && mv PATH "$d"/` for anything else |

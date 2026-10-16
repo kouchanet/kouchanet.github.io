@@ -58,7 +58,7 @@ sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml   # extract a value
 - Preview without `-i` first, or with `-n 's/old/new/p'` to see only changed lines.
 - Quote the script in single quotes; use `"…$var…"` only when you need expansion, and escape `&` and `/` in replacements.
 - `sed` is line-based; for multi-line edits use `perl -0pe` or python.
-- `-E` works on both GNU and BSD; `-r` is GNU-only; `\+` and `\?` are GNU basic-regex extensions.
+- `-E` works everywhere; `-r` is GNU and macOS 11+ only; `\+` and `\?` are GNU basic-regex extensions.
 
 ## awk
 
@@ -112,9 +112,9 @@ find . -name '*.log' -print0 | xargs -0 rm -f           # space-safe
 find . -name '*.py' -exec ruff check {} +               # batched, no xargs needed
 fd -e png -x optipng {}                                 # per file
 fd -e js -X prettier --write                            # batched
-xargs -n1 -I{} sh -c 'echo "{}: $(wc -l < "{}")"'       # per item with a shell
+xargs -I{} sh -c 'echo "{}: $(wc -l < "{}")"'           # per item with a shell (-I already means one item per command)
 xargs -P 4 -n 1 CMD                                     # parallel (GNU and BSD)
-xargs -r CMD                                            # GNU: do nothing on empty input
+xargs -r CMD                                            # do nothing on empty input (GNU default runs once; BSD accepts -r too)
 while IFS= read -r line; do …; done < f                 # line loop (keeps spaces/backslashes)
 while IFS= read -r -d '' f; do …; done < <(find . -name '*.md' -print0)   # NUL-safe loop
 for f in *.md; do [ -e "$f" ] || continue; …; done      # glob loop (guard against no match)
@@ -137,7 +137,7 @@ jq -n '{a: 1, b: [1,2]}'                                # build JSON
 jq -s 'add' a.json b.json ; jq -s '.[0] * .[1]' a b     # merge
 jq '.version = "1.2.3"' f > tmp && mv tmp f             # edit (no -i)
 jq 'del(.secret) | .list |= sort_by(.name)' f
-jq 'paths(scalars) | join(".")' f | head -n 40          # all leaf paths
+jq 'paths(scalars) | map(tostring) | join(".")' f | head -n 40   # all leaf paths (map(tostring) keeps jq 1.5 happy)
 jq -r '.. | .url? // empty' f                           # recursive search
 cat *.jsonl | jq -c 'select(.level == "error")' | head  # JSON lines
 ```
