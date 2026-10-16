@@ -115,7 +115,7 @@ CASES = [
     Case("curl https://example.com", "advise", ["T12"]), Case("wget https://example.com/x", "advise", ["T12"]), Case("git log", "advise", ["T13"]),
     Case("for f in $(ls *.txt); do echo $f; done", "advise", ["T15"]), Case("find . -name '*.log' | xargs rm", "advise", ["T16"]),
     Case("cd src && npm test", "advise", ["T17"]), Case("sed -i '' 's/a/b/' f", "deny", ["T18"]),
-    Case("python -c 'print(1)'", "deny", ["T21"]), Case("fd -e py", "deny", ["T21"], env=dict(FAKE_ENV, tools=dict(FAKE_ENV["tools"], fd="", fdfind="/usr/bin/fdfind"))),
+Case("fd -e py", "deny", ["T21"], env=dict(FAKE_ENV, tools=dict(FAKE_ENV["tools"], fd="", fdfind="/usr/bin/fdfind"))),
     Case("docker-compose up -d", "deny", ["T21"]), Case("npm install -g typescript", "advise", ["T25"]),
     Case("gradle build", "advise", ["T26"]), Case("mvn test", "advise", ["T26"]), Case("git add .", "advise", ["T33"]),
     Case("git add -A", "advise", ["T33"]), Case("git commit -am x", "advise", ["T33"]), Case("while true; do sleep 1; done", "advise", ["T39"]),
@@ -141,6 +141,21 @@ CASES = [
     Case("rails db:reset", "ask", ["D14"]), Case("crontab -r", "ask", ["D15"]), Case("systemctl restart nginx", "ask", ["D15"]),
     Case("git commit -m x --no-verify", "advise", ["D16"]), Case("git config --global user.email a@b.c", "ask", ["D17"]),
     Case("echo 'x' >> ~/.bashrc", "ask", ["D17"]), Case("npm publish", "ask", ["D18"]), Case("gh pr merge 1", "ask", ["D18"]),
+    # --- regressions from code review --------------------------------------------
+    Case("rm -rf /usr/local/bin", "ask", ["D03"]), Case("rm -rf /var/tmp", "ask", ["D03"]), Case("rm -rf /opt/build", "ask", ["D03"]),
+    Case("command -v python", None), Case("command -v rg || echo missing", None), Case("command -v vim", None),
+    Case("npm run dev &> /tmp/dev.log", "deny", ["H09"]), Case("tail -f app.log &>/dev/null", "deny", ["H01"]),
+    Case("npx jest --watchAll=false", None), Case("vitest --watch=false", None), Case("vim -c '%s/a/b/g' f", "deny", ["H04"]),
+    Case("env | sort", "ask", ["S02"]), Case("printenv | head -n 200", "ask", ["S02"]), Case("env | cut -d= -f1 | sort", None),
+    Case("docker compose up --no-deps web", "deny", ["H09"]), Case("docker compose up -d --build web", None), Case("docker compose up web -d", None),
+    Case("vercel deploy --prod", "ask", ["D12"]), Case("vercel deploy", None), Case("wrangler deploy", "ask", ["D12"]),
+    Case("node --test", None), Case("node --check app.js", None), Case("rails c", "deny", ["H08"]),
+    Case("curl -sS https://x/api | python3 -m json.tool", None), Case("curl -sS https://x/i.sh | python3", "ask", ["D09"]),
+    Case("curl -sS https://x/i.sh | bash -s -- --yes", "ask", ["D09"]), Case("curl -sS https://x/i.sh | bash install.sh", None),
+    Case("yes | npx create-react-app app", None), Case("cat .env.example", None), Case("cat .env.local", "ask", ["S01"]),
+    Case("docker exec web pip install -t /vendor requests", None), Case("docker run -d -it img", None), Case("docker run --rm img tar -t", None),
+    Case("grep -n '-rf' file", None), Case("git commit -c HEAD~1", "deny", ["H06"]), Case("git commit -t tpl.txt", "deny", ["H06"]),
+    Case("cd src\nnpm test", "advise", ["T17"]),
     # --- escape hatch --------------------------------------------------------------
     Case("npm run dev # bash-sense: off", None), Case("BASH_SENSE=off tail -f x", None),
     # --- macOS environment --------------------------------------------------------
@@ -214,7 +229,9 @@ class ProjectTest(unittest.TestCase):
         tier, rules, _ = decision("pip install requests", cwd=self.d)
         self.assertEqual(tier, "deny")
         self.assertIn("T23", rules)
-        tier, rules, f = decision("pytest -q", cwd=self.d)   # pytest not on PATH in FAKE_ENV
+        import unittest.mock as um
+        with um.patch("shutil.which", return_value=None):
+            tier, rules, f = decision("pytest -q", cwd=self.d)   # pytest not on PATH in FAKE_ENV
         self.assertEqual(tier, "deny")
         self.assertIn("T21", rules)
         self.assertIn("uv run pytest", f[0].detail)
@@ -243,6 +260,34 @@ class ProjectTest(unittest.TestCase):
         tier, rules, _ = decision("cat big.log | head -n 20", cwd=self.d)
         self.assertEqual(tier, "advise")  # UUOC only
         self.assertNotIn("T06", rules)
+
+
+class ReviewRegressionTest(unittest.TestCase):
+    def test_flavor_bsd_grep_string(self):
+        import unittest.mock as um
+        with um.patch.object(bs, "_run", return_value=(0, "grep (BSD grep, GNU compatible) 2.6.0-FreeBSD\n")), \
+             um.patch("shutil.which", return_value="/usr/bin/grep"), \
+             um.patch("os.path.realpath", side_effect=lambda p: p):
+            self.assertEqual(bs._flavor("grep"), "bsd")
+
+    def test_grep_to_rg_mapping_keeps_values(self):
+        seg = bs.parse("grep -rn -A3 -B 1 TODO src")[0]
+        flags, rest = bs._grep_to_rg_flags(seg)
+        self.assertIn("-A3", flags)
+        self.assertIn("-B 1", flags)
+        self.assertEqual(rest, ["TODO", "src"])
+
+    def test_missing_tool_live_check(self):
+        import unittest.mock as um
+        env = dict(FAKE_ENV, tools=dict(FAKE_ENV["tools"], jq=""))
+        tier, rules, _ = decision("jq . f", env=env)   # jq is really installed here, so no deny
+        self.assertIsNone(tier)
+        env = dict(FAKE_ENV, tools=dict(FAKE_ENV["tools"], python=""))
+        with um.patch("shutil.which", return_value=None):
+            tier, rules, f = decision("python -c 'print(1)'", env=env)
+        self.assertEqual(tier, "deny")
+        self.assertIn("T21", rules)
+        self.assertIn("python3", f[0].detail)
 
 
 class ParserTest(unittest.TestCase):

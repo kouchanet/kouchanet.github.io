@@ -79,6 +79,8 @@ class Seg(object):
             v = w.val
             if v == "--":
                 break
+            if w.quoted:
+                continue
             if v in flags:
                 return True
             # combined short flags: -rn contains -r
@@ -427,6 +429,18 @@ def tokenize(text, nested=False, subshell=False, via=None):
                 end_seg("&&")
                 i += 2
                 continue
+            if text.startswith("&>", i):
+                flush_word()
+                op = "&>>" if text.startswith("&>>", i) else "&>"
+                j = i + len(op)
+                while j < n and text[j] in " \t":
+                    j += 1
+                tstart = j
+                while j < n and text[j] not in " \t\n;|&<>":
+                    j += 1
+                cur.redirs.append((op, text[tstart:j]))
+                i = j
+                continue
             flush_word()
             tail = getattr(cur, "_group_tail", None)
             if cur.words or cur.redirs:
@@ -520,6 +534,11 @@ def analyze(seg):
             i += 1
             continue
         base = _basename(v)
+        if base == "command" and i + 1 < len(words) and words[i + 1].val in ("-v", "-V", "-vV", "-Vv"):
+            seg.prog_raw = v
+            seg.prog = "command"
+            seg.args = words[i + 1:]
+            return seg
         if base in WRAPPERS and not w.quoted:
             start_i = i
             seg.wrappers.append(base)
@@ -731,7 +750,14 @@ ENV_CACHE_TTL = 6 * 3600
 
 
 def _cache_path():
-    base = os.environ.get("TMPDIR") or os.environ.get("TMP") or os.environ.get("TEMP") or "/tmp"
+    base = os.environ.get("BASH_SENSE_CACHE_DIR") or os.environ.get("CLAUDE_PLUGIN_DATA")
+    if base:
+        try:
+            os.makedirs(base, exist_ok=True)
+        except Exception:
+            base = None
+    if not base:
+        base = os.environ.get("TMPDIR") or os.environ.get("TMP") or os.environ.get("TEMP") or "/tmp"
     try:
         uid = str(os.getuid())
     except AttributeError:
@@ -762,10 +788,12 @@ def _flavor(tool):
         pass
     rc, out = _run([tool, "--version"])
     low = out.lower()
-    if "gnu" in low or "free software foundation" in low:
-        return "gnu"
     if "busybox" in low:
         return "busybox"
+    if "bsd" in low:
+        return "bsd"
+    if "gnu" in low or "free software foundation" in low:
+        return "gnu"
     if rc == 0 and tool == "grep" and "bsd" in low:
         return "bsd"
     if rc == 0 and tool == "tar" and "bsdtar" in low:
@@ -848,6 +876,8 @@ def compute_env():
 
 def load_env(force=False):
     path = _cache_path()
+    if os.path.islink(path):
+        return compute_env()
     if not force:
         try:
             with open(path) as fh:
@@ -859,8 +889,9 @@ def load_env(force=False):
             pass
     data = compute_env()
     try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as fh:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(prefix="bash-sense-env-", suffix=".tmp", dir=os.path.dirname(path))
+        with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
         os.replace(tmp, path)
     except Exception:
@@ -1204,7 +1235,7 @@ def h_editor(seg, ctx):
     if seg.prog in ("vim", "vi", "nvim", "nano", "pico", "emacs", "micro", "helix", "hx", "joe", "mcedit"):
         if seg.prog == "emacs" and seg.has_flag("--batch", "-batch", "--script"):
             return None
-        if seg.prog in ("vim", "nvim", "vi") and (seg.has_flag("-es", "-Es", "-e", "-c") and seg.has_flag("-c", "-es", "-Es")):
+        if seg.prog in ("vim", "nvim", "vi") and seg.has_flag("-es", "-Es"):
             return None
         return Finding("deny", "H04", "`%s` opens a full-screen editor and waits for keystrokes." % seg.prog,
                        "Edit files with the Edit/Write tools, or non-interactively: `sed -i` for a line change, "
@@ -1242,8 +1273,8 @@ def h_git_commit_message(seg, ctx):
     if any(v in ("-e", "--edit") for v in vals):
         return Finding("deny", "H06", "`git commit --edit` opens an editor and waits.",
                        "Give the message inline: `git commit -m \"...\"` (a quoted heredoc via `-F -` for several lines).")
-    ok_flags = ("-m", "--message", "-F", "--file", "--no-edit", "-C", "--reuse-message", "-c",
-                "--reedit-message", "--fixup", "--squash", "--allow-empty-message", "-t", "--template")
+    ok_flags = ("-m", "--message", "-F", "--file", "--no-edit", "-C", "--reuse-message",
+                "--fixup", "--squash", "--allow-empty-message")
     for v in vals:
         if v in ok_flags or v.startswith("-m") or v.startswith("--message=") or v.startswith("-F") \
                 or v.startswith("--file=") or v.startswith("--fixup=") or v.startswith("--squash=") \
@@ -1264,10 +1295,16 @@ def h_docker_tty(seg, ctx):
         return None
     sub, sub2, rest = docker_sub(seg)
     vals = [w.val for w in rest]
-    if sub in ("run", "exec") and any(v in ("-it", "-ti", "-t", "--tty") or (v.startswith("-") and not v.startswith("--") and "t" in v[1:] and "i" in v[1:]) for v in vals):
+    own = []
+    for v in vals:
+        if not v.startswith("-"):
+            break
+        own.append(v)
+    detached = any(v in ("-d", "--detach") or (v.startswith("-") and not v.startswith("--") and "d" in v[1:]) for v in own)
+    if sub in ("run", "exec") and not detached and any(v in ("-it", "-ti", "-t", "--tty") or (v.startswith("-") and not v.startswith("--") and "t" in v[1:] and "i" in v[1:]) for v in own):
         return Finding("deny", "H07", "`%s %s -t` allocates a TTY, which does not exist here (\"the input device is not a TTY\")." % (seg.prog, sub),
                        "Drop `-t` (keep `-i` only when piping stdin): `%s %s CONTAINER CMD`. For a shell session, run commands one by one." % (seg.prog, sub))
-    if sub == "compose" and sub2 in ("exec", "run") and not any(v in ("-T", "--no-TTY", "--no-tty") for v in vals):
+    if sub == "compose" and sub2 in ("exec", "run") and not any(v in ("-T", "--no-TTY", "--no-tty", "-d", "--detach") for v in vals):
         return Finding("advise", "H07", "`docker compose %s` allocates a TTY by default; add `-T` to be safe without a terminal." % sub2)
     return None
 
@@ -1292,13 +1329,17 @@ def h_repl(seg, ctx):
         return None
     pos = seg.positionals()
     vals = seg.argv
+    if seg.prog == "rails":
+        if vals[:1] in (["c"], ["console"], ["db"], ["dbconsole"]):
+            return Finding("deny", "H08", "`rails %s` is an interactive console." % vals[0], "Use `rails runner 'CODE'` for Ruby, or `psql -c 'SQL'` for the database.")
+        return None
     if seg.has_flag("--version", "-V", "--help", "-h", "-?") or (seg.prog in ("node", "ruby", "perl", "php", "deno", "julia") and seg.has_flag("-v")):
         return None
     if seg.prog in ("python", "python3", "python2"):
         if pos or any(v in ("-c", "-m", "-") or v.startswith("-c") for v in vals):
             return None
     elif seg.prog == "node":
-        if pos or any(v in ("-e", "--eval", "-p", "--print", "-", "--version", "-v") for v in vals):
+        if pos or any(v in ("-e", "--eval", "-p", "--print", "-", "--version", "-v", "--test", "--check", "-c", "--run", "--watch") or v.startswith("--test") or v.startswith("--run") for v in vals):
             return None
     elif seg.prog in ("psql", "mysql"):
         if any(v in ("-c", "--command", "-f", "--file", "-e", "--execute", "-l", "--list", "-V", "--version") or v.startswith("--command=") or v.startswith("-c") or v.startswith("--file=") or v.startswith("-f") or v.startswith("-e") for v in vals):
@@ -1313,8 +1354,6 @@ def h_repl(seg, ctx):
         if pos or any(v in ("-e", "-r", "-v", "--version", "-E", "-M", "-run", "-noshell", "-S", "-s") or v.startswith("-e") or v.startswith("-r") for v in vals):
             return None
         if seg.prog == "deno" and vals:
-            return None
-        if seg.prog == "rails" and vals:
             return None
         if seg.prog in ("ruby", "perl", "php") and vals and vals[0] in ("-n", "-p", "-l", "-a", "-s"):
             return None
@@ -1338,8 +1377,8 @@ def h_repl(seg, ctx):
 
 SERVER_PATTERNS = [
     # (regex over the segment text after wrappers, advice for watchers / None for servers)
-    (r"^(npx |pnpm |yarn |bunx |pnpm exec |yarn exec |bun x |npm exec )?(jest|vitest|mocha|ava|playwright test|karma start|cypress open|ng test|nx test)\b.*\s(--watch|-w|--watchAll|--ui|--watch-all)(\s|=|$)", "drop `--watch`/`--ui` to run once (`vitest run`, `jest --watchAll=false`, `npx playwright test`)"),
-    (r"^(npx |pnpm |yarn |bunx |pnpm exec |yarn exec |bun x |npm exec )?(tsc|esbuild|rollup|webpack|sass|tailwindcss|postcss|parcel|cargo|deno run|deno test|node)\b.*\s(-w|--watch)(\s|=|$)", "drop the watch flag to run it once (`tsc --noEmit`, `esbuild ...` without `--watch`)"),
+    (r"^(npx |pnpm |yarn |bunx |pnpm exec |yarn exec |bun x |npm exec )?(jest|vitest|mocha|ava|playwright test|karma start|cypress open|ng test|nx test)\b.*\s(--watch|-w|--watchAll|--ui|--watch-all)(\s|$|=(?!(false|0)\b))", "drop `--watch`/`--ui` to run once (`vitest run`, `jest --watchAll=false`, `npx playwright test`)"),
+    (r"^(npx |pnpm |yarn |bunx |pnpm exec |yarn exec |bun x |npm exec )?(tsc|esbuild|rollup|webpack|sass|tailwindcss|postcss|parcel|cargo|deno run|deno test|node)\b.*\s(-w|--watch)(\s|$|=(?!(false|0)\b))", "drop the watch flag to run it once (`tsc --noEmit`, `esbuild ...` without `--watch`)"),
     (r"^(npx |pnpm |yarn |bunx |pnpm exec |yarn exec |bun x |npm exec )?(nodemon|ts-node-dev|tsx watch|chokidar|onchange|watchexec|cargo watch|air|reflex|modd|entr|parcel watch|webpack serve|webpack-dev-server|deno task dev)\b", "run the underlying command once instead of the file watcher"),
     (r"^(npm|pnpm|yarn|bun) (run )?(dev|start|serve|preview|watch|storybook|start:dev|dev:server)\b", None),
     (r"^(npx |pnpm |yarn |bunx |bun x )?(next|nuxt|vite|astro|remix|gatsby|svelte-kit|expo|ng|parcel|snowpack|storybook|docusaurus|vuepress|vitepress|mkdocs|hugo|zola|eleventy|wrangler|vercel|netlify|firebase|serve|http-server|live-server|browser-sync|json-server) (dev|start|serve|preview|server|emulators:start)\b", None),
@@ -1347,7 +1386,7 @@ SERVER_PATTERNS = [
     (r"^(python3?|uv run|poetry run|pipenv run|pdm run) (-m )?(http\.server|flask run|uvicorn|gunicorn|hypercorn|daphne|manage\.py runserver|mkdocs serve|streamlit run|gradio|jupyter (lab|notebook)|bokeh serve|fastapi dev|fastapi run|litestar run|sanic|aiohttp\.web|SimpleHTTPServer)\b", None),
     (r"^(flask run|uvicorn|gunicorn|hypercorn|daphne|streamlit run|jupyter (lab|notebook)|jupyter-lab|mkdocs serve|fastapi (dev|run)|gradio|marimo edit)\b", None),
     (r"^(bundle exec )?(rails (s|server)|jekyll (s|serve)|puma|unicorn|rackup|sidekiq|middleman server|foreman start|overmind start)\b", None),
-    (r"^(php (artisan serve|-S)|symfony serve|mix phx\.server|iex -S mix|flutter run|ngrok|cloudflared tunnel|redis-server|mongod|postgres |pg_ctl start$|mysqld|minikube tunnel|kubectl port-forward|kubectl proxy|docker compose up$|docker compose up (?!.*(-d|--detach)).*$|docker-compose up$|docker-compose up (?!.*(-d|--detach)).*$|dotnet watch|dotnet run --project .*--no-build$|air$|gin$)", None),
+    (r"^(php (artisan serve|-S)|symfony serve|mix phx\.server|iex -S mix|flutter run|ngrok|cloudflared tunnel|redis-server|mongod|postgres |pg_ctl start$|mysqld|minikube tunnel|kubectl port-forward|kubectl proxy|docker compose up(?![^\n]*\s(-d|--detach)(\s|$))(\s|$)|docker-compose up(?![^\n]*\s(-d|--detach)(\s|$))(\s|$)|dotnet watch|dotnet run --project .*--no-build$|air$|gin$)", None),
     (r"^(nc|ncat|netcat) .*(-l|--listen)\b", None),
     (r"^(yes)$", None),
 ]
@@ -1363,6 +1402,8 @@ def h_server(seg, ctx):
     if seg.prog is None or _hang_exempt(seg, ctx):
         return None
     text = _seg_text_after_wrappers(seg)
+    if seg.prog == "yes" and seg.downstream():
+        return None
     if seg.prog in ("ping", "ping6"):
         if seg.has_flag("-c", "-w", "-W") or any(v.startswith("-c") for v in seg.argv):
             return None
@@ -1410,6 +1451,8 @@ def h_pager_like(seg, ctx):
 def h_prompts(seg, ctx):
     p = seg.prog
     vals = seg.argv
+    if seg.has_stdin and p not in ("ssh", "gh"):
+        return None
     if p in ("npm", "pnpm", "yarn", "bun") and vals and vals[0] == "init" and not seg.has_flag("-y", "--yes"):
         return Finding("advise", "H14", "`%s init` asks questions interactively; `%s init -y` takes the defaults." % (p, p))
     if p in ("npm", "pnpm", "yarn", "bun", "npx") and vals and (vals[0] == "create" or (p == "npx" and vals[0].startswith("create-"))) and not any(v in ("-y", "--yes", "--defaults", "--template", "-t", "--no-interactive") or v.startswith("--template") for v in vals):
@@ -1457,15 +1500,14 @@ def _grep_to_rg_flags(seg):
             skip_next = True
             continue
         if v.startswith("-") and len(v) > 1 and not v.startswith("--"):
-            letters = v[1:]
-            keep = ""
-            for ch in letters:
-                if ch in "rR":
-                    continue
-                if ch in "ilwvFEcnoLhHaqmAB":
-                    keep += ch
-                if ch in ("A", "B", "C", "m", "e", "f"):
-                    skip_next = True
+            if v in ("-A", "-B", "-C", "-m", "-e", "-f"):
+                out.append(v)
+                skip_next = True
+                nxt_idx = seg.args.index(w) + 1
+                if nxt_idx < len(seg.args):
+                    out[-1] = v + " " + seg.args[nxt_idx].raw
+                continue
+            keep = "".join(ch for ch in v[1:] if ch not in "rR")
             if keep:
                 out.append("-" + keep)
             continue
@@ -1593,7 +1635,7 @@ def t_uuoc(seg, ctx):
     return None
 
 
-SECRET_FILE_RE = re.compile(r"(^|/)(\.env(\.[A-Za-z0-9_.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?|\.aws/credentials|\.docker/config\.json|id_(rsa|ed25519|ecdsa|dsa)|.*\.pem|.*\.key|.*\.p12|.*\.pfx|secrets?\.(ya?ml|json|toml)|\.secrets?|\.ssh/config|token(s)?\.json|service[-_]account.*\.json|kubeconfig|\.kube/config)$")
+SECRET_FILE_RE = re.compile(r"(^|/)(\.env(\.(?!(example|sample|template|dist|defaults|schema|test)\b)[A-Za-z0-9_.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials(\.json)?|\.aws/credentials|\.docker/config\.json|id_(rsa|ed25519|ecdsa|dsa)|.*\.pem|.*\.key|.*\.p12|.*\.pfx|secrets?\.(ya?ml|json|toml)|\.secrets?|\.ssh/config|token(s)?\.json|service[-_]account.*\.json|kubeconfig|\.kube/config)$")
 LOCKFILE_RE = re.compile(r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lock|bun\.lockb|Cargo\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|composer\.lock|Gemfile\.lock|go\.sum|pdm\.lock|flake\.lock|mix\.lock|packages\.lock\.json)$")
 BINARY_RE = re.compile(r"\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tgz|bz2|xz|zst|7z|jar|war|class|o|so|dylib|dll|exe|bin|wasm|woff2?|ttf|otf|eot|mp[34]|mov|avi|sqlite|db|pyc|parquet|npy|pkl|lockb)$", re.I)
 MINIFIED_RE = re.compile(r"\.(min\.(js|css)|bundle\.js|map)$", re.I)
@@ -1782,14 +1824,14 @@ def t_xargs_null(seg, ctx):
 def t_cd_chain(seg, ctx):
     if seg.prog != "cd" or seg.subshell or seg.nested or seg.via:
         return None
-    if seg.next_op not in ("&&", ";"):
+    if seg.next_op not in ("&&", ";", "\n"):
         return None
     target = first_positional(seg.args) or ""
     nxt = None
     for s in seg.pipeline:
         pass
     # find the following segment's program (same top-level list order is not tracked here; use the raw command)
-    m = re.search(r"\bcd\s+\S+\s*(&&|;)\s*([A-Za-z0-9_./-]+)", ctx.cmd)
+    m = re.search(r"\bcd\s+\S+\s*(&&|;|\n)\s*([A-Za-z0-9_./-]+)", ctx.cmd)
     follower = _basename(m.group(2)) if m else ""
     hints = {"git": "`git -C %s ...`", "make": "`make -C %s ...`", "npm": "`npm --prefix %s run ...`",
              "pnpm": "`pnpm -C %s ...`", "yarn": "`yarn --cwd %s ...`", "cargo": "`cargo --manifest-path %s/Cargo.toml ...`",
@@ -1973,6 +2015,10 @@ def t_missing_tool(seg, ctx):
     if "/" in (seg.prog_raw or ""):
         return None
     if ctx.has(p):
+        return None
+    import shutil
+    if shutil.which(p):
+        ctx.env.setdefault("tools", {})[p] = shutil.which(p)
         return None
     spec = MISSING_ALT[p](ctx)
     if not spec:
@@ -2280,12 +2326,15 @@ def d_rm(seg, ctx):
             return Finding("ask", "D03", "`rm -rf .git` throws away the repository's whole history and remotes.", "If the goal is a clean tree, `git stash -u` or a fresh clone is reversible.")
     if recursive and targets:
         plain = []
+        root = ctx.proj.get("root") or ctx.cwd
         for w in targets:
             v = w.val.rstrip("/")
             base = os.path.basename(v)
-            if _is_tmp_path(os.path.abspath(os.path.join(ctx.cwd, os.path.expanduser(v)))):
+            absolute = os.path.abspath(os.path.join(ctx.cwd, os.path.expanduser(v)))
+            if _is_tmp_path(absolute):
                 continue
-            if base in ARTIFACT_DIRS or any(v.endswith("/" + a) for a in ARTIFACT_DIRS):
+            inside = absolute.startswith(ctx.cwd.rstrip("/") + "/") or absolute.startswith(root.rstrip("/") + "/")
+            if inside and (base in ARTIFACT_DIRS or any(v.endswith("/" + a) for a in ARTIFACT_DIRS)):
                 continue
             if "$(" in w.raw or "`" in w.raw:
                 plain.append(w)
@@ -2378,9 +2427,22 @@ def d_chmod_chown(seg, ctx):
 def d_curl_pipe_sh(seg, ctx):
     if seg.prog not in ("curl", "wget", "fetch") or seg.nested:
         return None
-    down = seg.downstream()
-    if any(p in ("sh", "bash", "zsh", "dash", "python", "python3", "node", "perl", "ruby") for p in down[:2]):
-        return Finding("ask", "D09", "`%s ... | %s` runs remote code without anyone reading it." % (seg.prog, [p for p in down if p in ("sh", "bash", "zsh", "dash", "python", "python3", "node", "perl", "ruby")][0]),
+    for nxt in seg.pipeline[seg.index + 1:seg.index + 3]:
+        if nxt.prog in ("sh", "bash", "zsh", "dash", "ksh"):
+            script = []
+            for w in nxt.args:
+                if w.val == "--":
+                    break
+                if not w.val.startswith("-"):
+                    script.append(w)
+            if nxt.has_flag("-c") or script:
+                continue
+        elif nxt.prog in ("python", "python3", "node", "perl", "ruby", "php"):
+            if nxt.has_flag("-c", "-e", "-m", "-p", "--eval", "-r", "-n", "-l", "-a") or [w for w in nxt.positionals() if w.val != "-"]:
+                continue
+        else:
+            continue
+        return Finding("ask", "D09", "`%s ... | %s` runs remote code without anyone reading it." % (seg.prog, nxt.prog),
                        "Download first, look, then run: `curl -fsSLo /tmp/install.sh URL && head -n 60 /tmp/install.sh`, then `bash /tmp/install.sh`.")
     return None
 
@@ -2480,11 +2542,11 @@ def d_cloud_infra(seg, ctx):
         return Finding("ask", "D12", "`gcloud ... delete` removes cloud resources.", "")
     if p == "az" and re.search(r"\b(delete|purge)\b", txt):
         return Finding("ask", "D12", "`az ... delete` removes cloud resources.", "")
-    if p in ("vercel", "netlify", "fly", "flyctl", "heroku", "railway", "wrangler") and re.search(r"\b(deploy|publish|--prod|destroy|delete|remove|rm)\b", txt):
-        if re.search(r"\b(destroy|delete|remove|rm)\b", txt):
+    if p in ("vercel", "netlify", "fly", "flyctl", "heroku", "railway", "wrangler", "firebase", "sst", "serverless", "sls", "cdk", "sam", "amplify"):
+        if re.search(r"(^|\s)(destroy|delete|remove|rm|teardown)(\s|$)", txt):
             return Finding("ask", "D12", "`%s %s` removes deployed resources." % (p, vals[0] if vals else ""), "")
-        if re.search(r"\b(--prod|--production|production)\b", txt):
-            return Finding("ask", "D12", "`%s %s` deploys to production." % (p, vals[0] if vals else ""), "Preview deploys are the default; production needs the user's go-ahead.")
+        if re.search(r"(^|\s)(--prod|--production|production)(\s|$|=)", txt) or (p in ("fly", "flyctl", "wrangler", "railway", "heroku", "sst", "serverless", "sls", "cdk", "sam", "amplify", "firebase") and re.search(r"(^|\s)(deploy|publish|push|up)(\s|$)", txt)):
+            return Finding("ask", "D12", "`%s %s` deploys to a live environment." % (p, vals[0] if vals else ""), "Preview/staging deploys are the safe default; a live deploy needs the user's go-ahead.")
     return None
 
 
@@ -2584,14 +2646,22 @@ SECRET_LITERAL_RE = re.compile(r"(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{2
 @rule
 def s_env_dump(seg, ctx):
     p = seg.prog
-    if p in ("env", "printenv") and not seg.positionals() and not seg.has_flag("-0", "--null", "-i", "-u", "-C", "-S") and not seg.bounded() and not seg.nested:
+    if p in ("env", "printenv") and not seg.positionals() and not seg.has_flag("-0", "--null", "-i", "-u", "-C", "-S") and not seg.nested:
         if p == "env" and seg.args:
             return None
-        return Finding("ask", "S02", "`%s` prints every variable, tokens and passwords included, into the transcript." % p,
+        down = seg.downstream()
+        if down[:1] in (["grep"], ["rg"]):
+            return Finding("advise", "S02", "`env | grep` still prints matching values; `env | cut -d= -f1 | grep -i NAME` shows names only, `printenv NAME | cut -c1-4` confirms a value without exposing it.")
+        if down[:1] in (["cut"], ["awk"], ["sed"], ["wc"], ["md5sum"], ["sha256sum"], ["shasum"]):
+            return None
+        if seg.stdout_to_file():
+            return None
+        return Finding("ask", "S02", "`%s` prints every variable, tokens and passwords included, into the transcript%s." % (p, " (piping through `%s` does not hide the values)" % down[0] if down else ""),
                        "Ask for what you need: `printenv HOME PATH`, `env | cut -d= -f1 | sort` (names only), or `env | grep -i '^npm_\\|^node' | cut -d= -f1`.")
-    if p in ("env", "printenv") and seg.bounded() and seg.downstream()[:1] in (["grep"], ["rg"]):
-        return Finding("advise", "S02", "`env | grep` still prints matching values; `env | cut -d= -f1 | grep -i NAME` shows names only, `printenv NAME | cut -c1-4` confirms a value without exposing it.")
-    if p == "set" and not seg.args and not seg.bounded():
+    if p == "set" and not seg.args and not seg.nested:
+        down = seg.downstream()
+        if down[:1] in (["cut"], ["awk"], ["sed"], ["wc"]) or seg.stdout_to_file():
+            return None
         return Finding("ask", "S02", "bare `set` dumps every shell variable and function, secrets included.", "`set -o` for options, `declare -p NAME` for one variable.")
     return None
 
